@@ -20,10 +20,14 @@
 const int MIN_PWD_LENGTH = 8;
 regex_t noSpecialCharsRegex;
 regex_t yesOrNoRegex;
+regex_t numRegex;
 regex_t vowelRegex;
 sqlite3 *db;
 sqlite3_stmt *res;
 
+char password_arr[10][100]; //up to 10 pwds, 100 chars max in length
+int password_ctr = 0;
+// utility fn for creating random number in range provided
 int randomNumberInRange(int range)
 {
     return (1 + rand() / ((RAND_MAX + 1u) / range));
@@ -80,7 +84,7 @@ int promptRule(char *message)
 }
 
 // transforms input word into 'secure' password
-char *transformPwd(char *final_word, char *initial_word, int shouldUseSpecialChars)
+void transformPwd(char *final_word, char *initial_word, int shouldUseSpecialChars)
 {
     int r = rand();
     char specialChars[] = {'!', '@', '#', '$', '*'};
@@ -111,20 +115,7 @@ char *transformPwd(char *final_word, char *initial_word, int shouldUseSpecialCha
             final_word[i] = randomNumberInRange(2) == 2 ? toupper(initial_word[i]) : initial_word[i];
         }
     }
-    return final_word;
-}
-
-// entrypoint of a user on program init
-void promptPassword()
-{
-    /**
-     * 1. make a call to sqlite to determine whether this is first time setup or not.
-     * 2. if first time, setup password.
-     *      - if not, prompt password
-     * 3. get password
-     *      - if valid, proceed
-     *      - if not valid, prompt again
-     */
+    strcpy(password_arr[password_ctr++], final_word);
 }
 
 void compileRegex();
@@ -134,7 +125,7 @@ void setupDB();
 void compileRegex()
 {
     /* compile regex */
-    if (regcomp(&noSpecialCharsRegex, "[^a-zA-Z ]", 0) == 1 || regcomp(&yesOrNoRegex, "^[ynYN]$", 0) == 1 || regcomp(&vowelRegex, "[aeiouAEIOU]", 0) == 1)
+    if (regcomp(&noSpecialCharsRegex, "[^a-zA-Z ]", 0) == 1 || regcomp(&yesOrNoRegex, "^[ynYN]$", 0) == 1 || regcomp(&vowelRegex, "[aeiouAEIOU]", 0) == 1 || regcomp(&numRegex, "[1-9]", 0) == 1)
     {
         printf("Regex error...\n");
     }
@@ -165,14 +156,13 @@ void openTable(char *err_msg)
 
 char retrieved_pwd_arr[256];
 char *retrieved_pwd = retrieved_pwd_arr;
-int callback(void *NotUsed, int argc, char **argv, char **azColName)
+int callback(void *veryUsed, int argc, char **argv, char **azColName)
 {
-    for (int i = 0; i < argc; i++)
-    {
-        printf("record %d - %s", i + 1, argv[i]);
-    }
+    char *retrieved_pwd = (char *)veryUsed;
     retrieved_pwd = argv[0];
-    return argv[0] ? 1 : 0; //master pwd is always the first record
+
+    printf("%s\n", retrieved_pwd);
+    return 0;
 }
 int compareMasterPwd(char *master_pwd)
 {
@@ -180,8 +170,8 @@ int compareMasterPwd(char *master_pwd)
     char *sql = sql_arr;
     sql = "SELECT * FROM Pwdgen;";
     char *err_msg;
-    int rc = sqlite3_exec(db, sql, callback, 0, &err_msg);
-    printf("retrieved password: %s\n", retrieved_pwd);
+    int rc = sqlite3_exec(db, sql, callback, &retrieved_pwd, &err_msg);
+    printf("%s\n", retrieved_pwd);
     return strcmp(master_pwd, retrieved_pwd);
 }
 
@@ -250,6 +240,86 @@ void setupDB()
     checkForPwdOrCreateOne(err_msg);
 }
 
+// entrypoint of a user on program init
+int promptMasterPassword()
+{
+    char *master_pwd = "velociraptor";
+    char user_input_arr[256];
+    char *user_input = user_input_arr;
+    printf("Please enter your password:");
+    int try_counter = 0;
+    while (try_counter < 3)
+    {
+        printf("\n>");
+        scanf(" %s", user_input);
+        if (strcmp(user_input, master_pwd) == 0)
+        {
+            printf("Successfully entered password.\n");
+
+            return 1;
+        }
+        else
+        {
+            try_counter++;
+        }
+    }
+    printf("You cannot pass\n");
+    return 0;
+}
+
+void createNewPassword()
+{
+    char initial_word_arr[256];
+    char *initial_word = initial_word_arr;
+    promptWord(initial_word);
+    int shouldUseSpecialChars = promptRule("special characters");
+    char final_pwd_arr[255];
+    char *final_word = final_pwd_arr;
+    transformPwd(final_word, initial_word, shouldUseSpecialChars);
+    printf("Your password is: %s\n", final_word);
+}
+
+// print all passwords
+void printPasswords()
+{
+    printf("These are your passwords:\n");
+    for (int i = 0; i < password_ctr; i++)
+    {
+        printf("%d) %s\n", i + 1, password_arr[i]);
+    }
+}
+
+// main menu function where all
+void mainMenu()
+{
+    printf("What would you like to do?\n[1] create new password\n[2] display passwords\n[3] exit\n>");
+    int num = 0;
+    int *input = &num;
+    scanf(" %d", input);
+    while (1)
+    {
+        if (*input == 1)
+        { // create new password
+            createNewPassword();
+            mainMenu();
+        }
+        else if (*input == 2)
+        { // display password
+            printPasswords();
+            mainMenu();
+        }
+        else if (*input == 3)
+        { // exit
+            break;
+        }
+        else
+        { //invalid regex
+            printf("Please enter 1, 2 or 3\n");
+            mainMenu();
+        }
+    }
+}
+
 int main(int argc, char *argv[])
 {
     /**
@@ -265,17 +335,15 @@ int main(int argc, char *argv[])
      */
     srand((unsigned int)time(NULL));
     compileRegex();
+    //setupDB();
     printf("Welcome to pwdgen, a password-creating utility!\n");
-    setupDB();
-    promptPassword();
-    char initial_word_arr[256];
-    char *initial_word = initial_word_arr;
-    promptWord(initial_word);
-    int shouldUseSpecialChars = promptRule("special characters");
-    char final_pwd_arr[255];
-    char *final_word = final_pwd_arr;
-    transformPwd(final_word, initial_word, shouldUseSpecialChars);
-    printf("Your password is: %s\n", final_word);
+
+    int promptPwd = promptMasterPassword();
+    if (!promptPwd)
+        return 1;
+
+    mainMenu();
+
     printf("Have a good day!");
 
     sqlite3_finalize(res);
